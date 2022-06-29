@@ -373,82 +373,126 @@ pub fn never(directory: impl AsRef<Path>, file_name: impl AsRef<Path>) -> Rollin
 /// # }
 /// ```
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct Rotation(RotationKind);
+pub struct Rotation {
+    interval: Option<Duration>,
+    max_bytes: Option<usize>,
+}
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-enum RotationKind {
+pub(crate) enum DateFormat {
+    Secondly,
     Minutely,
     Hourly,
     Daily,
-    Never,
+    None,
 }
 
 impl Rotation {
     /// Provides an minutely rotation
-    pub const MINUTELY: Self = Self(RotationKind::Minutely);
+    pub const MINUTELY: Self = Self::new().with_interval(Duration::minutes(1));
     /// Provides an hourly rotation
-    pub const HOURLY: Self = Self(RotationKind::Hourly);
+    pub const HOURLY: Self = Self::new().with_interval(Duration::hours(1));
     /// Provides a daily rotation
-    pub const DAILY: Self = Self(RotationKind::Daily);
+    pub const DAILY: Self = Self::new().with_interval(Duration::days(1));
     /// Provides a rotation that never rotates.
-    pub const NEVER: Self = Self(RotationKind::Never);
+    pub const NEVER: Self = Self::new();
+
+    pub const fn new() -> Self {
+        Self {
+            interval: None,
+            max_bytes: None,
+        }
+    }
+
+    pub const fn with_interval(mut self, interval: Duration) -> Self {
+        self.interval = Some(interval);
+        self
+    }
+
+    pub const fn with_max_size(mut self, max_bytes: usize) -> Self {
+        self.max_bytes = Some(max_bytes);
+        self
+    }
 
     pub(crate) fn next_date(&self, current_date: &OffsetDateTime) -> Option<OffsetDateTime> {
-        let unrounded_next_date = match *self {
-            Rotation::MINUTELY => *current_date + Duration::minutes(1),
-            Rotation::HOURLY => *current_date + Duration::hours(1),
-            Rotation::DAILY => *current_date + Duration::days(1),
-            Rotation::NEVER => return None,
-        };
-        Some(self.round_date(&unrounded_next_date))
+        self.interval.map(|interval| {
+            let unrounded_next_date = *current_date + interval;
+            self.round_date(&unrounded_next_date)
+        })
+    }
+
+    pub(crate) fn to_date_format(&self) -> DateFormat {
+        match (self.interval, self.max_bytes) {
+            (None, None) => DateFormat::None,
+            (_, Some(_)) => DateFormat::Secondly,
+            (Some(interval), None) => {
+                if interval >= Duration::days(1) {
+                    DateFormat::Daily
+                } else if interval >= Duration::hours(1) {
+                    DateFormat::Hourly
+                } else if interval >= Duration::minutes(1) {
+                    DateFormat::Minutely
+                } else {
+                    DateFormat::Secondly
+                }
+            }
+        }
     }
 
     // note that this method will panic if passed a `Rotation::NEVER`.
     pub(crate) fn round_date(&self, date: &OffsetDateTime) -> OffsetDateTime {
-        match *self {
-            Rotation::MINUTELY => {
+        match self.to_date_format() {
+            DateFormat::Secondly => date.clone(),
+            DateFormat::Minutely => {
                 let time = Time::from_hms(date.hour(), date.minute(), 0)
                     .expect("Invalid time; this is a bug in tracing-appender");
                 date.replace_time(time)
             }
-            Rotation::HOURLY => {
+            DateFormat::Hourly => {
                 let time = Time::from_hms(date.hour(), 0, 0)
                     .expect("Invalid time; this is a bug in tracing-appender");
                 date.replace_time(time)
             }
-            Rotation::DAILY => {
+            DateFormat::Daily => {
                 let time = Time::from_hms(0, 0, 0)
                     .expect("Invalid time; this is a bug in tracing-appender");
                 date.replace_time(time)
             }
-            // Rotation::NEVER is impossible to round.
-            Rotation::NEVER => {
-                unreachable!("Rotation::NEVER is impossible to round.")
+            // DateFormat::None is impossible to round.
+            DateFormat::None => {
+                unreachable!("DateFormat::None is impossible to round.")
             }
         }
     }
 
     pub(crate) fn join_date(&self, filename: &str, date: &OffsetDateTime) -> String {
-        match *self {
-            Rotation::MINUTELY => {
+        match self.to_date_format() {
+            DateFormat::Secondly => {
+                let format =
+                    format_description::parse("[year]-[month]-[day]-[hour]-[minute]-[second]")
+                        .expect("Unable to create a formatter; this is a bug in tracing-appender");
+                let date = date
+                    .format(&format)
+                    .expect("Unable to format OffsetDateTime; this is a bug in tracing-appender");
+                format!("{}.{}", filename, date)
+            }
+            DateFormat::Minutely => {
                 let format = format_description::parse("[year]-[month]-[day]-[hour]-[minute]")
                     .expect("Unable to create a formatter; this is a bug in tracing-appender");
-
                 let date = date
                     .format(&format)
                     .expect("Unable to format OffsetDateTime; this is a bug in tracing-appender");
                 format!("{}.{}", filename, date)
             }
-            Rotation::HOURLY => {
+            DateFormat::Hourly => {
                 let format = format_description::parse("[year]-[month]-[day]-[hour]")
                     .expect("Unable to create a formatter; this is a bug in tracing-appender");
-
                 let date = date
                     .format(&format)
                     .expect("Unable to format OffsetDateTime; this is a bug in tracing-appender");
                 format!("{}.{}", filename, date)
             }
-            Rotation::DAILY => {
+            DateFormat::Daily => {
                 let format = format_description::parse("[year]-[month]-[day]")
                     .expect("Unable to create a formatter; this is a bug in tracing-appender");
                 let date = date
@@ -456,7 +500,7 @@ impl Rotation {
                     .expect("Unable to format OffsetDateTime; this is a bug in tracing-appender");
                 format!("{}.{}", filename, date)
             }
-            Rotation::NEVER => filename.to_string(),
+            DateFormat::None => filename.to_string(),
         }
     }
 }
