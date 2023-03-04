@@ -1,6 +1,6 @@
 [package]
 name = "tracing-appender"
-version = "0.2.0"
+version = "0.2.999"
 authors = [
     "Zeki Sherif <zekshi@amazon.com>",
     "Tokio Contributors <team@tokio.rs>"
@@ -27,7 +27,6 @@ parking_lot = { optional = true, version = "0.12.1" }
 thiserror = "1.0.31"
 
 [dependencies.tracing-subscriber]
-path = "../tracing-subscriber"
 version = "0.3"
 default-features = false
 features = ["fmt", "std"]
